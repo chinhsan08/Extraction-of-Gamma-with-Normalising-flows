@@ -1,0 +1,18 @@
+{
+  "num_trials": 25,
+  "train_pool_size": 10000000,
+  "val_size": 1000000,
+  "train_sample_size": 1000000,
+  "batch_size": 10000,
+  "lr": 0.01,
+  "max_epochs": 100,
+  "patience": 10,
+  "min_delta": 1e-05,
+  "num_flows": 16,
+  "hidden_features": 128,
+  "num_bins": 16,
+  "device": "cuda",
+  "data_path": "D_Kspipi_even_SDP_1.1e7.npy",
+  "timestamp": "2026-01-24T00:26:32.371592",
+  "note": "Fixed validation set (last 1M), each trial samples from first 10M training pool"
+}
