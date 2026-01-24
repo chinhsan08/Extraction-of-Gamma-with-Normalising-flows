@@ -1,0 +1,12 @@
+{
+  "num_trials": 25,
+  "train_pool_size": 10000000,
+  "val_size": 1000000,
+  "train_sample_size": 1000000,
+  "best_val_loss": -0.9668032026290894,
+  "mean_val_loss": -0.9658534152507783,
+  "std_val_loss": 0.0007806175740179571,
+  "mean_epochs": 79.84,
+  "std_epochs": 16.498921176852747,
+  "num_early_stopped": 19
+}
