@@ -1,0 +1,11 @@
+{
+  "num_trials": 25,
+  "data_size": 11000000,
+  "bootstrap_size": 1000000,
+  "num_epochs": 200,
+  "lr": 0.01,
+  "num_flows": 16,
+  "hidden_features": 128,
+  "num_bins": 16,
+  "timestamp": "2026-01-27T21:17:53.380185"
+}
