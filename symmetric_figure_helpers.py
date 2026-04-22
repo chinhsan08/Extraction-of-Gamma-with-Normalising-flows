@@ -5,18 +5,21 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import ConnectionPatch
 
 
-_abs_s_colors = np.vstack(
-    [
-        np.array([[1.0, 1.0, 1.0, 1.0]]),
-        np.array([
-            [0.93333333, 0.96470588, 1.0, 1.0],
-            [0.61960784, 0.77254902, 1.0, 1.0],
-            [0.23921569, 0.49411765, 0.90980392, 1.0],
-            [0.04313725, 0.23529412, 0.54901961, 1.0],
-        ]),
-    ]
-)
-ABS_S_CMAP = LinearSegmentedColormap.from_list("absS_white_blue", _abs_s_colors)
+# Elegant purple-teal sequential colormap for |S|
+_abs_s_colors = [
+    (1.0, 1.0, 1.0),       # white
+    (0.95, 0.92, 0.98),    # very light lavender
+    (0.82, 0.75, 0.92),    # light purple
+    (0.62, 0.55, 0.82),    # medium purple
+    (0.42, 0.45, 0.75),    # purple-blue
+    (0.25, 0.42, 0.68),    # blue
+    (0.15, 0.38, 0.55),    # teal-blue
+    (0.08, 0.30, 0.42),    # dark teal
+]
+ABS_S_CMAP = LinearSegmentedColormap.from_list("absS_purple_teal", _abs_s_colors)
+
+# Alternative: warm colormap for C (diverging red-white-blue is already good)
+# Keep RdBu_r for C as it's standard for diverging data
 
 
 def _subsample(points, max_points=50000, seed=1234):
@@ -30,12 +33,30 @@ def _subsample(points, max_points=50000, seed=1234):
     return points[idx]
 
 
-def _point_bin_densities(points, bins=180, extent=(0.0, 1.0, 0.0, 1.0)):
+def _subsample_points_weights(points, weights=None, max_points=50000, seed=1234):
+    points = np.asarray(points)
+    if weights is None:
+        return _subsample(points, max_points=max_points, seed=seed), None
+    weights = np.asarray(weights)
+    if max_points is None or len(points) <= max_points:
+        return points, weights
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(len(points), size=max_points, replace=False)
+    return points[idx], weights[idx]
+
+
+def _point_bin_densities(points, bins=180, extent=(0.0, 1.0, 0.0, 1.0), weights=None):
     points = np.asarray(points)
     xmin, xmax, ymin, ymax = extent
     xedges = np.linspace(xmin, xmax, bins + 1)
     yedges = np.linspace(ymin, ymax, bins + 1)
-    hist, _, _ = np.histogram2d(points[:, 0], points[:, 1], bins=[xedges, yedges], density=True)
+    hist, _, _ = np.histogram2d(
+        points[:, 0],
+        points[:, 1],
+        bins=[xedges, yedges],
+        density=True,
+        weights=weights,
+    )
 
     ix = np.clip(np.searchsorted(xedges, points[:, 0], side="right") - 1, 0, bins - 1)
     iy = np.clip(np.searchsorted(yedges, points[:, 1], side="right") - 1, 0, bins - 1)
@@ -93,11 +114,18 @@ def _hist2d_panel(
     sample_label=None,
     label_color="white",
     bins=320,
+    weights=None,
 ):
     extent = (0.0, 1.0, 0.0, 1.0)
     xedges = np.linspace(extent[0], extent[1], bins + 1)
     yedges = np.linspace(extent[2], extent[3], bins + 1)
-    hist, _, _ = np.histogram2d(points[:, 0], points[:, 1], bins=[xedges, yedges], density=True)
+    hist, _, _ = np.histogram2d(
+        points[:, 0],
+        points[:, 1],
+        bins=[xedges, yedges],
+        density=True,
+        weights=weights,
+    )
 
     ax.imshow(
         hist.T,
@@ -184,6 +212,11 @@ def plot_joint_marginals_density(
     ax_joint_l.set_xlabel(r"$m'$")
     ax_joint_l.set_ylabel(r"$\theta'$")
     ax_joint_l.set_title(title_left)
+    ax_joint_l.text(
+        0.95, 0.05, r"$D \to K_S\pi^+\pi^-$",
+        transform=ax_joint_l.transAxes, fontsize=12,
+        color="white", ha="right", va="bottom", weight="bold",
+    )
     if sample_label is not None:
         ax_joint_l.text(
             0.95,
@@ -211,6 +244,11 @@ def plot_joint_marginals_density(
     ax_joint_r.set_xlabel(r"$m'$")
     ax_joint_r.set_ylabel(r"$\theta'$")
     ax_joint_r.set_title(title_right)
+    ax_joint_r.text(
+        0.95, 0.05, r"$D \to K_S\pi^+\pi^-$",
+        transform=ax_joint_r.transAxes, fontsize=12,
+        color="white", ha="right", va="bottom", weight="bold",
+    )
 
     ax_top_r = fig.add_axes(rtop)
     ax_right_r = fig.add_axes(rright)
@@ -366,6 +404,156 @@ def plot_absS_comparison_density(
     return fig
 
 
+def plot_C_and_S2_combined(
+    C_exact,
+    C_flow,
+    S2_exact,
+    S2_flow,
+    *,
+    extent=(0.0, 1.0, 0.0, 1.0),
+    C_percentile=95,
+    S2_percentile=95,
+    C_cmap="coolwarm",
+    S2_cmap="coolwarm",
+    figsize=(11, 8),
+    dpi=300,
+    savepath=None,
+):
+    """
+    Create a publication-quality four-panel figure combining C and S^2 comparisons.
+
+    Layout:
+        (a) Isobar C      (b) Flow C       [shared colorbar C]
+        (c) Isobar S^2    (d) Flow S^2     [shared colorbar S^2]
+    """
+    from matplotlib.ticker import ScalarFormatter
+
+    # Compute color limits for C (diverging around 0)
+    C_ref = np.concatenate([np.ravel(C_exact), np.ravel(C_flow)])
+    C_ref = C_ref[np.isfinite(C_ref)]
+    C_vmax = np.nanpercentile(np.abs(C_ref), C_percentile) if C_ref.size else 1.0
+    C_norm = TwoSlopeNorm(vcenter=0.0, vmin=-C_vmax, vmax=C_vmax)
+
+    # Compute color limits for S^2 (also diverging around 0)
+    S2_ref = np.concatenate([np.ravel(S2_exact), np.ravel(S2_flow)])
+    S2_ref = S2_ref[np.isfinite(S2_ref)]
+    S2_vmax = np.nanpercentile(np.abs(S2_ref), S2_percentile) if S2_ref.size else 1.0
+    S2_norm = TwoSlopeNorm(vcenter=0.0, vmin=-S2_vmax, vmax=S2_vmax)
+
+    # Create figure with GridSpec - no colorbar columns, will add manually
+    fig = plt.figure(figsize=figsize, dpi=dpi)
+    gs = fig.add_gridspec(
+        2, 2,
+        width_ratios=[1, 1],
+        height_ratios=[1, 1],
+        wspace=0.15,
+        hspace=0.28,
+        left=0.08,
+        right=0.85,
+        top=0.94,
+        bottom=0.08,
+    )
+
+    ax_C_exact = fig.add_subplot(gs[0, 0])
+    ax_C_flow = fig.add_subplot(gs[0, 1])
+    ax_S2_exact = fig.add_subplot(gs[1, 0])
+    ax_S2_flow = fig.add_subplot(gs[1, 1])
+
+    # Consistent tick locations
+    tick_locs = [0, 0.25, 0.5, 0.75, 1.0]
+
+    # Panel (a): Isobar C
+    ax_C_exact.imshow(
+        C_exact,
+        origin="lower",
+        extent=extent,
+        cmap=C_cmap,
+        norm=C_norm,
+        interpolation="bilinear",
+        aspect="equal",
+        rasterized=True,
+    )
+    ax_C_exact.set_title(r"Isobar", fontsize=16)
+    ax_C_exact.set_xticks(tick_locs)
+    ax_C_exact.set_yticks(tick_locs)
+    ax_C_exact.set_xlabel(r"$m'$", fontsize=18)
+    ax_C_exact.set_ylabel(r"$\theta'$", fontsize=18)
+
+    # Panel (b): Flow C
+    im_C = ax_C_flow.imshow(
+        C_flow,
+        origin="lower",
+        extent=extent,
+        cmap=C_cmap,
+        norm=C_norm,
+        interpolation="bilinear",
+        aspect="equal",
+        rasterized=True,
+    )
+    ax_C_flow.set_title(r"Flow", fontsize=16)
+    ax_C_flow.set_xticks(tick_locs)
+    ax_C_flow.set_yticks(tick_locs)
+    ax_C_flow.set_xlabel(r"$m'$", fontsize=18)
+    ax_C_flow.set_ylabel(r"$\theta'$", fontsize=18)
+
+    # Panel (c): Isobar S^2
+    ax_S2_exact.imshow(
+        S2_exact,
+        origin="lower",
+        extent=extent,
+        cmap=S2_cmap,
+        norm=S2_norm,
+        interpolation="bilinear",
+        aspect="equal",
+        rasterized=True,
+    )
+    ax_S2_exact.set_xticks(tick_locs)
+    ax_S2_exact.set_yticks(tick_locs)
+    ax_S2_exact.set_xlabel(r"$m'$", fontsize=18)
+    ax_S2_exact.set_ylabel(r"$\theta'$", fontsize=18)
+
+    # Panel (d): Flow S^2
+    im_S2 = ax_S2_flow.imshow(
+        S2_flow,
+        origin="lower",
+        extent=extent,
+        cmap=S2_cmap,
+        norm=S2_norm,
+        interpolation="bilinear",
+        aspect="equal",
+        rasterized=True,
+    )
+    ax_S2_flow.set_xticks(tick_locs)
+    ax_S2_flow.set_yticks(tick_locs)
+    ax_S2_flow.set_xlabel(r"$m'$", fontsize=18)
+    ax_S2_flow.set_ylabel(r"$\theta'$", fontsize=18)
+
+    # Shared colorbar for C (top row) - spans both panels
+    cbar_C = fig.colorbar(im_C, ax=[ax_C_exact, ax_C_flow], location='right',
+                          fraction=0.046, pad=0.02, shrink=0.95)
+    cbar_C.set_label(r"$\mathcal{C}(m',\theta')$", fontsize=16)
+    cbar_C.ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+    cbar_C.ax.ticklabel_format(style='sci', axis='y', scilimits=(-2, 2))
+
+    # Shared colorbar for S^2 (bottom row) - spans both panels
+    cbar_S2 = fig.colorbar(im_S2, ax=[ax_S2_exact, ax_S2_flow], location='right',
+                           fraction=0.046, pad=0.02, shrink=0.95)
+    cbar_S2.set_label(r"$\mathcal{S}^2(m',\theta')$", fontsize=16)
+    cbar_S2.ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+    cbar_S2.ax.ticklabel_format(style='sci', axis='y', scilimits=(-2, 2))
+
+    # Style all axes with frames
+    for ax in (ax_C_exact, ax_C_flow, ax_S2_exact, ax_S2_flow):
+        ax.tick_params(direction="out", length=4, width=1.0)
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.2)
+            spine.set_color("black")
+
+    if savepath is not None:
+        fig.savefig(savepath, dpi=dpi, bbox_inches="tight")
+    return fig
+
+
 def plot_S2_comparison_density(
     S2_exact,
     S2_flow,
@@ -373,8 +561,8 @@ def plot_S2_comparison_density(
     extent=(0.0, 1.0, 0.0, 1.0),
     percentile=98,
     cmap="RdBu_r",
-    title_left=r"Isobar model: $S^2(m',\theta')$",
-    title_right=r"Flow model: $S^2(m',\theta')$",
+    title_left=r"Isobar model: $\mathcal{S}^2(m',\theta')$",
+    title_right=r"Flow model: $\mathcal{S}^2(m',\theta')$",
     xlabel=r"$m'$",
     ylabel=r"$\theta'$",
     figsize=(10.5, 5.0),
@@ -420,7 +608,7 @@ def plot_S2_comparison_density(
         ax.tick_params(direction='out', length=3, width=0.8)
 
     cbar = fig.colorbar(im2, ax=[ax_joint_l, ax_joint_r], shrink=0.82)
-    cbar.set_label(r"$S^2(m',\theta') = K\overline{K} - C^2$")
+    cbar.set_label(r"$\mathcal{S}^2(m',\theta') = K\overline{K} - C^2$")
 
     if savepath is not None:
         fig.savefig(savepath, dpi=dpi, bbox_inches='tight')
@@ -446,6 +634,8 @@ def plot_joint_marginals_samples(
     max_points=None,
     bins=320,
     seed=1234,
+    exact_weights=None,
+    flow_weights=None,
 ):
     left_start = 0.08
     bottom = 0.12
@@ -461,10 +651,14 @@ def plot_joint_marginals_samples(
     rtop = [rm[0], rm[1] + rm[3] + marginal_gap, rm[2], top_height]
     rright = [rm[0] + rm[2] + marginal_gap - 0.02, rm[1], right_width, rm[3]]
 
-    exact_plot = _subsample(exact_samples, max_points=max_points, seed=seed)
-    flow_plot = _subsample(flow_samples, max_points=max_points, seed=seed + 1)
-    _, hist_exact = _point_bin_densities(exact_plot)
-    _, hist_flow = _point_bin_densities(flow_plot)
+    exact_plot, exact_w = _subsample_points_weights(
+        exact_samples, exact_weights, max_points=max_points, seed=seed
+    )
+    flow_plot, flow_w = _subsample_points_weights(
+        flow_samples, flow_weights, max_points=max_points, seed=seed + 1
+    )
+    _, hist_exact = _point_bin_densities(exact_plot, weights=exact_w)
+    _, hist_flow = _point_bin_densities(flow_plot, weights=flow_w)
     vmax = np.nanpercentile(np.concatenate([hist_exact.ravel(), hist_flow.ravel()]), 99)
 
     fig = plt.figure(figsize=(12, 5))
@@ -479,6 +673,12 @@ def plot_joint_marginals_samples(
         sample_label=sample_label,
         label_color="white",
         bins=bins,
+        weights=exact_w,
+    )
+    ax_joint_l.text(
+        0.95, 0.05, r"$D \to K_S\pi^+\pi^-$",
+        transform=ax_joint_l.transAxes, fontsize=12,
+        color="white", ha="right", va="bottom", weight="bold",
     )
 
     ax_joint_r = fig.add_axes(rm)
@@ -488,6 +688,12 @@ def plot_joint_marginals_samples(
         vmax=vmax,
         title=title_right,
         bins=bins,
+        weights=flow_w,
+    )
+    ax_joint_r.text(
+        0.95, 0.05, r"$D \to K_S\pi^+\pi^-$",
+        transform=ax_joint_r.transAxes, fontsize=12,
+        color="white", ha="right", va="bottom", weight="bold",
     )
 
     ax_top_r = fig.add_axes(rtop)
@@ -529,6 +735,8 @@ def plot_conditionals_around_main(
     sample_label=None,
     savepath=None,
     bins=320,
+    exact_weights=None,
+    flow_weights=None,
 ):
     n_top = len(mprime_slices)
     n_right = len(theta_slices)
@@ -548,10 +756,10 @@ def plot_conditionals_around_main(
 
     fig = plt.figure(figsize=(10, 8))
     ax_main = fig.add_axes(main)
-    exact_plot = _subsample(exact_samples, max_points=None)
-    flow_plot = _subsample(flow_samples, max_points=None)
-    _, hist_exact = _point_bin_densities(exact_plot, bins=bins)
-    _, hist_flow = _point_bin_densities(flow_plot, bins=bins)
+    exact_plot, exact_w = _subsample_points_weights(exact_samples, exact_weights, max_points=None)
+    flow_plot, flow_w = _subsample_points_weights(flow_samples, flow_weights, max_points=None)
+    _, hist_exact = _point_bin_densities(exact_plot, bins=bins, weights=exact_w)
+    _, hist_flow = _point_bin_densities(flow_plot, bins=bins, weights=flow_w)
     vmax = np.nanpercentile(np.concatenate([hist_exact.ravel(), hist_flow.ravel()]), 99)
     _hist2d_panel(
         ax_main,
@@ -561,8 +769,14 @@ def plot_conditionals_around_main(
         sample_label=None,
         label_color="white",
         bins=bins,
+        weights=exact_w,
     )
     ax_main.set_title("")
+    ax_main.text(
+        0.95, 0.05, r"$D \to K_S\pi^+\pi^-$",
+        transform=ax_main.transAxes, fontsize=12,
+        color="white", ha="right", va="bottom", weight="bold",
+    )
     if sample_label is not None:
         ax_main.text(
             0.95,
